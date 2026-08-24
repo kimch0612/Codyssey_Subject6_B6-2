@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 import subprocess
@@ -31,6 +32,7 @@ def call_gemini( # 제미나이 공통 요청 엔트리 함수
     model: str = "gemini-3.1-flash-lite", # 모델명
     temperature: float = 0.3, # 답변의 창의성 (0~2 사이; 2로 갈수록 더 창의적임)
     max_tokens: int = 1024, # 최대 답변 길이 (넘으면 내용이 끊김)
+    system_instruction: str | None = None, # 시스템 프롬프트 (공통 프롬프트)
 ) -> str:
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     body = {
@@ -40,6 +42,8 @@ def call_gemini( # 제미나이 공통 요청 엔트리 함수
             "maxOutputTokens": max_tokens,
         },
     }
+    if system_instruction:
+        body["systemInstruction"] = {"parts": [{"text": system_instruction}]}
 
     request = urllib.request.Request( # 요청 데이터 생성
         url,
@@ -62,33 +66,64 @@ def call_gemini( # 제미나이 공통 요청 엔트리 함수
     return result["candidates"][0]["content"]["parts"][0]["text"] # 답변 중 필요한 것만 정제해서 반환
 
 
-def main() -> None:
+COMMIT_SYSTEM_PROMPT = """당신은 git 커밋 메시지를 작성하는 도우미입니다. 아래 규칙을 반드시 지켜서 커밋 메시지를 작성하세요.
+
+- 첫 줄은 커밋 제목이며, 50자 이내를 권장하고 72자를 넘지 않습니다.
+- 제목 다음에 빈 줄을 하나 두고, 선택적으로 본문을 작성할 수 있습니다.
+- 본문을 작성한다면, 변경된 파일/모듈 1~3개를 언급하거나 핵심 변경 사항을 1~2개의 불릿("- "로 시작)으로 요약합니다.
+- 커밋 메시지 텍스트만 출력하고, 다른 설명이나 인사말은 포함하지 않습니다.
+
+예시:
+feat: Git 변경 사항 기반 커밋 메시지 자동 생성 기능 추가
+
+- git diff 결과를 수집해 AI 입력 컨텍스트로 전달하도록 구현
+- 커밋 메시지 템플릿(feat/fix 등) 생성 규칙 적용
+- API Key 미설정 시 안내 메시지 및 에러 처리 개선"""
+
+
+def run_commit() -> None: # 관련 데이터를 받아와서 커밋 메시지를 생성해주는 함수
     status = get_git_status()
     if not status.strip():
         print("[INFO] 변경 사항이 없습니다. 커밋 메시지를 생성하지 않고 종료합니다.")
         return
 
-    diff = get_git_diff()
-    changed_files = len(status.splitlines()) # 여러 라인으로 넘어온 데이터를 쪼개서 일차원 리스트로 저장한다
-    diff_lines = len(diff.splitlines())
+    diff = get_git_diff() # 수정된 세부 내역
+    changed_files = len(status.splitlines()) # 수정된 파일 개수
+    diff_lines = len(diff.splitlines()) # 수정된 세부 내역의 총 줄 수
 
     print(f"[INFO] Git status 수집 완료: {changed_files}개 파일 변경 감지")
     print(f"[INFO] Git diff 수집 완료: {diff_lines}줄")
 
-    api_key = os.environ.get("AI_API_KEY") # api 키를 환경변수로 불러오고
-    if not api_key: # 없으면 안내 띄우고 종료
+    api_key = os.environ.get("AI_API_KEY")
+    if not api_key:
         print("[ERROR] AI_API_KEY 환경변수가 설정되지 않았습니다.")
         print('## 예) export AI_API_KEY="YOUR_KEY"')
         return
 
+    user_prompt = f"[git status]\n{status}\n[git diff]\n{diff}" # 수정/추가/삭제된 현황과 수정된 세부 내역으로 유저 프롬프트를 생성함
+
     print("[INFO] AI API 요청 중...")
     try:
-        summary = call_gemini(f"다음 git diff를 한 문장으로 요약해줘:\n\n{diff}", api_key)
+        message = call_gemini(user_prompt, api_key, system_instruction=COMMIT_SYSTEM_PROMPT)
     except RuntimeError as e:
         print(f"[ERROR] {e}")
         return
 
-    print("[DONE] 응답:", summary) # 응답 온거 출력
+    print("[DONE] 커밋 메시지 생성 완료")
+    print()
+    print("--- Commit Message ---")
+    print(message.strip())
+    print("----------------------")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser() # 인자를 받을 수 있게 관련 기능 활성화
+    subparsers = parser.add_subparsers(dest="command", required=True) # 인자 파싱 (required가 True이므로 항상 필요로 함)
+    subparsers.add_parser("commit") # commit 인자 받을 수 있게 허용
+    args = parser.parse_args() # 실제 인자 파싱
+
+    if args.command == "commit": # 들어온 인자가 커밋이면
+        run_commit() # 커밋 함수 실행
 
 
 if __name__ == "__main__":
