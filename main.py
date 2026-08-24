@@ -28,7 +28,7 @@ def main() -> None:
         return
 
     diff = get_git_diff()
-    changed_files = len(status.strip().splitlines())
+    changed_files = len(status.splitlines()) # 여러 라인으로 넘어온 데이터를 쪼개서 일차원 리스트로 저장한다
     diff_lines = len(diff.splitlines())
 
     print(f"[INFO] Git status 수집 완료: {changed_files}개 파일 변경 감지")
