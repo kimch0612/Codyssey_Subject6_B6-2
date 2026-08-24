@@ -62,17 +62,19 @@
 
 ### 3. AI API / REST API 연동
 
+> **사용 API 확정: Google Gemini API** (2026-08-24) — 무료 티어로 사용 가능해서 선택. 아래 표는 Gemini 기준으로 구체화함.
+
 | 용어 | 뜻 | 왜 알아야 하나 |
 |---|---|---|
 | **REST API** | HTTP 메서드(GET/POST 등)와 URL, 요청 바디로 서버 기능을 호출하는 방식 | AI API는 보통 POST로 "메시지"를 보내고 "생성된 텍스트"를 JSON으로 응답받는 구조 |
-| **Endpoint** | API가 요청을 받는 URL 주소 | 제공사마다 다름 (예: OpenAI `.../v1/chat/completions`, Anthropic `.../v1/messages`) — 어떤 API를 쓸지에 따라 요청 형식 자체가 달라짐 |
-| **Authorization Header** | 요청에 인증 정보를 담는 부분 (`Authorization: Bearer <KEY>` 또는 `x-api-key: <KEY>` 등) | 이 헤더로 "누가 요청했는지"를 서버가 확인 — 값이 없거나 틀리면 401 오류 |
-| **Request Body (JSON)** | 모델명, 메시지, 파라미터 등을 담는 실제 요청 내용 | 프롬프트 설계 결과가 최종적으로 담기는 곳 |
-| **Response 구조** | 응답 JSON 안에서 생성된 텍스트가 들어있는 위치 (예: `choices[0].message.content`, `content[0].text` 등) | 제공사마다 필드명이 달라서, 쓰는 API 문서를 보고 정확한 경로로 파싱해야 함 |
-| **HTTP 상태 코드** | 200(성공), 401(인증 실패), 403(권한 없음), 429(요청 한도 초과), 500(서버 오류) 등 | "API 호출 실패 시 원인을 포함한 메시지"를 만들려면 상태코드별로 다르게 안내해야 함 |
-| **`model` 파라미터** | 사용할 AI 모델 지정 | 모델마다 성능/속도/비용이 다름 — CLI 옵션으로 바꿀 수 있어야 하는 값 중 하나 |
-| **`temperature`** | 생성 결과의 무작위성(창의성) 조절 값 | 0에 가까울수록 결정적·일관, 높을수록 다양·예측 어려움 — 커밋 메시지처럼 일관성이 중요한 출력엔 낮은 값이 유리 |
-| **`max_tokens`** | 응답으로 생성 가능한 최대 토큰 수 | 너무 작으면 결과가 중간에 잘리고, 너무 크면 비용/시간이 늘어남 |
+| **Endpoint** | API가 요청을 받는 URL 주소 | Gemini: `https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent` — **모델명이 URL 경로 안에** 들어가는 방식. (참고: OpenAI `.../v1/chat/completions`, Anthropic `.../v1/messages`처럼 제공사마다 endpoint 형태 자체가 다름) |
+| **Authorization Header** | 요청에 인증 정보를 담는 부분 | Gemini는 `Authorization: Bearer`가 아니라 **`x-goog-api-key: <KEY>`** 헤더 사용(또는 `?key=<KEY>` 쿼리 파라미터도 가능하지만, URL에 키가 남아 로그·히스토리에 노출될 수 있어 헤더 방식 권장). 값이 없거나 틀리면 401 — 인증 방식도 제공사마다 다르다는 걸 보여주는 사례 |
+| **Request Body (JSON)** | 모델명, 메시지, 파라미터 등을 담는 실제 요청 내용 | Gemini는 `messages` 대신 **`contents: [{ role, parts: [{ text }] }]`** 구조 사용. `temperature`/`maxOutputTokens` 같은 파라미터는 메시지와 섞이지 않고 별도의 **`generationConfig`** 객체 안에 들어감 |
+| **Response 구조** | 응답 JSON 안에서 생성된 텍스트가 들어있는 위치 | Gemini는 **`candidates[0].content.parts[0].text`** 경로. (참고: OpenAI `choices[0].message.content`, Anthropic `content[0].text`) — 제공사마다 필드명이 달라서 실제 쓰는 API 문서를 보고 정확한 경로로 파싱해야 함 |
+| **HTTP 상태 코드** | 200(성공), 401(인증 실패), 403(권한 없음), 429(요청 한도 초과), 500(서버 오류) 등 | "API 호출 실패 시 원인을 포함한 메시지"를 만들려면 상태코드별로 다르게 안내해야 함. Gemini 무료 티어는 RPM/RPD 한도가 낮아서 **429를 실제로 마주치기 쉬움** — 예외 처리 연습에 오히려 도움 |
+| **`model` 파라미터** | 사용할 AI 모델 지정 | Gemini는 이 값이 endpoint URL 경로 자체에 들어감(예: `models/gemini-2.5-flash:generateContent`). 정확한 사용 가능 모델명은 자주 바뀌므로 코드 작성 직전 [Google AI Studio](https://ai.google.dev/gemini-api/docs/quickstart)에서 최신 목록 확인 — 여기서 확인한 모델을 `-model` 옵션의 기본값으로 사용 |
+| **`temperature`** | 생성 결과의 무작위성(창의성) 조절 값 (Gemini에서는 `generationConfig.temperature`) | 0에 가까울수록 결정적·일관, 높을수록 다양·예측 어려움 — 커밋 메시지처럼 일관성이 중요한 출력엔 낮은 값이 유리 |
+| **`max_tokens`** | 응답으로 생성 가능한 최대 토큰 수 (Gemini에서는 **`generationConfig.maxOutputTokens`** — 파라미터 이름이 제공사마다 다른 대표 사례) | 너무 작으면 결과가 중간에 잘리고, 너무 크면 비용/시간이 늘어남. CLI 옵션명(`-max-tokens`)은 그대로 두고 내부에서 `maxOutputTokens`로 매핑하면 됨 |
 | **토큰 (Token)** | LLM이 텍스트를 처리하는 최소 단위 | API 비용과 입출력 한도가 토큰 수 기준으로 계산됨 |
 | **Context Window** | 모델이 한 번에 참고 가능한 입력+출력 토큰의 최대 범위 | diff가 너무 길면 이 한도를 넘을 수 있음 — safe-mode에서 "diff 일부만 전송"이 필요한 이유 중 하나 |
 
@@ -80,8 +82,8 @@
 
 | 용어 | 뜻 | 왜 알아야 하나 |
 |---|---|---|
-| **System / User 프롬프트** | AI에게 "역할과 규칙"을 지정하는 시스템 메시지와, 실제 "요청 내용"을 담는 사용자 메시지의 구분 | 커밋/PR 출력 형식 규칙(제목 1줄, 섹션 헤더 등)은 System 프롬프트에 명시하는 게 효과적 |
-| **Role 기반 메시지 구조** | `{"role": "system"/"user"/"assistant", "content": "..."}` 형태의 메시지 배열로 대화를 표현하는 방식 | 대부분의 AI API가 이 구조를 사용 — 프롬프트를 코드에서 리스트로 조립하게 됨 |
+| **System / User 프롬프트** | AI에게 "역할과 규칙"을 지정하는 시스템 메시지와, 실제 "요청 내용"을 담는 사용자 메시지의 구분 | 커밋/PR 출력 형식 규칙(제목 1줄, 섹션 헤더 등)은 System 프롬프트에 명시하는 게 효과적. **Gemini는 System 프롬프트를 `contents` 배열 안 role이 아니라 별도의 top-level `systemInstruction` 필드로 분리**해서 받음 |
+| **Role 기반 메시지 구조** | `{"role": ..., "content"/"parts": ...}` 형태의 메시지 배열로 대화를 표현하는 방식 | 대부분의 AI API가 이 구조를 사용 — 프롬프트를 코드에서 리스트로 조립하게 됨. **Gemini는 role이 `user`/`model` 두 가지뿐**(OpenAI/Anthropic의 `assistant`에 해당하는 이름이 `model`) — system은 role이 아니라 위의 `systemInstruction`으로 별도 처리 |
 | **Few-shot Prompting** | 원하는 출력 형식의 예시를 프롬프트에 넣어 AI가 그 패턴을 따라하게 유도하는 기법 | subject.txt의 "결과 예시"를 프롬프트 예시로 활용하면 형식 준수율이 올라감 |
 | **구조화된 출력 유도** | "반드시 `## Why`, `## What`, `## How to Test` 섹션으로 답하라"처럼 출력 포맷을 프롬프트에 명시적으로 강제하는 설계 | PR 본문의 템플릿 요구사항(섹션 헤더 + 불릿)을 만족시키는 핵심 방법 |
 | **컨텍스트 주입 (Context Injection)** | git diff 텍스트, 변경 파일 목록 같은 실제 데이터를 프롬프트에 끼워 넣는 것 | AI가 "일반적인 답"이 아니라 "이 변경사항에 대한" 답을 하게 만드는 핵심 |
@@ -120,7 +122,7 @@ subject.txt의 기능 요구사항을 학습 순서에 맞게 재배열한 단�
 
 ### 0단계 — 사전 준비
 - **목표**: 개발 환경 세팅, AI API 키 발급, 프로젝트 구조 잡기
-- **학습 목표**: 어떤 AI API를 쓸지 결정(예: OpenAI/Anthropic 등), API 키 발급 절차, Python 3.10+ 환경 구성
+- **학습 목표**: ~~어떤 AI API를 쓸지 결정~~ → **Gemini API로 확정 (2026-08-24, 무료 티어)**. 남은 건 API 키 발급 절차, Python 3.10+ 환경 구성
 - **완료 조건**: `AI_API_KEY` 환경변수를 설정한 뒤 가장 단순한 요청 하나가 정상 응답을 받는 것까지 확인
 - **생각해볼 질문**: API Key가 유출되면 어떤 피해가 생길 수 있고, 막기 위한 최소한의 습관은 뭘까?
 
