@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import re
 import subprocess
 import urllib.error
 import urllib.request
@@ -9,6 +10,11 @@ import urllib.request
 COMMIT_TITLE_MAX_LENGTH = 72
 PR_TITLE_MAX_LENGTH = 80
 PR_SECTIONS = ["## Why", "## What", "## How to Test"]
+
+SENSITIVE_PATTERNS = [
+    (re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"), "[EMAIL]"),
+    (re.compile(r"(?i)(api[_-]?key|secret|token|password)(\s*[:=]\s*)[\"']?[A-Za-z0-9_\-]{16,}[\"']?"), r"\1\2[MASKED]"),
+]
 
 
 COMMIT_SYSTEM_PROMPT = """당신은 git 커밋 메시지를 작성하는 도우미입니다. 아래 규칙을 반드시 지켜서 커밋 메시지를 작성하세요.
@@ -152,7 +158,13 @@ def fix_pr_sections(body: str) -> str: # pr 응답으로 받은 데이터가 지
     return "\n".join(fixed_lines).strip()
 
 
-def run_commit() -> None: # 관련 데이터를 받아와서 커밋 메시지를 생성해주는 함수
+def mask_sensitive(text: str) -> str: # SENSITIVE_PATTERNS에 저장된 패턴이 감지되면, 마스킹 처리하는 함수
+    for pattern, replacement in SENSITIVE_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
+def run_commit(safe_mode: bool) -> None: # 관련 데이터를 받아와서 커밋 메시지를 생성해주는 함수
     status = get_git_status()
     if not status.strip():
         print("[INFO] 변경 사항이 없습니다. 커밋 메시지를 생성하지 않고 종료합니다.")
@@ -164,6 +176,10 @@ def run_commit() -> None: # 관련 데이터를 받아와서 커밋 메시지를
 
     print(f"[INFO] Git status 수집 완료: {changed_files}개 파일 변경 감지")
     print(f"[INFO] Git diff 수집 완료: {diff_lines}줄")
+
+    if safe_mode: # 인자에 -safe-mode가 있었다면
+        print("[INFO] Safe Mode 적용: 민감정보 마스킹 후 전송합니다.")
+        diff = mask_sensitive(diff)
 
     api_key = os.environ.get("AI_API_KEY")
     if not api_key:
@@ -191,7 +207,7 @@ def run_commit() -> None: # 관련 데이터를 받아와서 커밋 메시지를
     print("----------------------")
 
 
-def run_pr() -> None: # pr 초안을 제미나이를 이용해 뽑아오자
+def run_pr(safe_mode: bool) -> None: # pr 초안을 제미나이를 이용해 뽑아오자
     status = get_git_status()
     if not status.strip():
         print("[INFO] 변경 사항이 없습니다. PR을 생성하지 않고 종료합니다.")
@@ -199,6 +215,10 @@ def run_pr() -> None: # pr 초안을 제미나이를 이용해 뽑아오자
 
     diff = get_git_diff()
     branch = get_current_branch()
+
+    if safe_mode:
+        print("[INFO] Safe Mode 적용: 민감정보 마스킹 후 전송합니다.")
+        diff = mask_sensitive(diff)
 
     api_key = os.environ.get("AI_API_KEY")
     if not api_key:
@@ -232,14 +252,16 @@ def run_pr() -> None: # pr 초안을 제미나이를 이용해 뽑아오자
 def main() -> None:
     parser = argparse.ArgumentParser() # 인자를 받을 수 있게 관련 기능 활성화
     subparsers = parser.add_subparsers(dest="command", required=True) # 인자를 받을 수 있게 준비 (required가 True이므로 항상 필요로 함)
-    subparsers.add_parser("commit") # commit 인자 받을 수 있게 허용
-    subparsers.add_parser("pr") # pr 인자 받을 수 있게 허용
+    commit_parser = subparsers.add_parser("commit") # commit 인자 받을 수 있게 허용
+    commit_parser.add_argument("-safe-mode", action="store_true")
+    pr_parser = subparsers.add_parser("pr") # pr 인자 받을 수 있게 허용
+    pr_parser.add_argument("-safe-mode", action="store_true") # safe-mode 인자 받을 수 있게 허용
     args = parser.parse_args() # 실제 인자 파싱
 
     if args.command == "commit": # 들어온 인자가 커밋이면
-        run_commit() # 커밋 함수 실행
+        run_commit(args.safe_mode) # 커밋 함수 실행
     elif args.command == "pr": # 들어온 인자가 피알이면
-        run_pr() # 피알 함수 실행
+        run_pr(args.safe_mode) # 피알 함수 실행
 
 
 if __name__ == "__main__":
