@@ -1,2 +1,3 @@
 subject.txt
 .env
+__pycache__/
