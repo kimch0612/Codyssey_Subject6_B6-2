@@ -3,6 +3,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import urllib.error
 import urllib.request
 
@@ -134,8 +135,11 @@ def call_gemini( # 제미나이 공통 요청 엔트리 함수
 def truncate(text: str, max_length: int) -> str: # 글자수가 특정 수를 초과하면 자른다
     if len(text) <= max_length:
         return text
+    truncated = text[:max_length]
     print(f"[WARN] 제목이 {max_length}자를 초과해 잘렸습니다.")
-    return text[:max_length]
+    print(f"  원본({len(text)}자): {text}")
+    print(f"  결과({len(truncated)}자): {truncated}")
+    return truncated
 
 
 def fix_pr_sections(body: str) -> str: # pr 응답으로 받은 데이터가 지정된 형식이 아닌 경우, 재포맷팅하는 함수
@@ -168,11 +172,11 @@ def mask_sensitive(text: str) -> str: # SENSITIVE_PATTERNS에 저장된 패턴�
     return text
 
 
-def run_commit(safe_mode: bool, model: str, temperature: float, max_tokens: int) -> None: # 관련 데이터를 받아와서 커밋 메시지를 생성해주는 함수
+def run_commit(safe_mode: bool, model: str, temperature: float, max_tokens: int) -> int: # 관련 데이터를 받아와서 커밋 메시지를 생성해주는 함수
     status = get_git_status()
     if not status.strip():
         print("[INFO] 변경 사항이 없습니다. 커밋 메시지를 생성하지 않고 종료합니다.")
-        return
+        return 0
 
     diff = get_git_diff() # 수정된 세부 내역
     changed_files = len(status.splitlines()) # 수정된 파일 개수
@@ -189,7 +193,7 @@ def run_commit(safe_mode: bool, model: str, temperature: float, max_tokens: int)
     if not api_key:
         print("[ERROR] AI_API_KEY 환경변수가 설정되지 않았습니다.")
         print('## 예) export AI_API_KEY="YOUR_KEY"')
-        return
+        return 1
 
     user_prompt = f"[git status]\n{status}\n[git diff]\n{diff}" # 수정/추가/삭제된 현황과 수정된 세부 내역으로 유저 프롬프트를 생성함
 
@@ -202,7 +206,7 @@ def run_commit(safe_mode: bool, model: str, temperature: float, max_tokens: int)
         )
     except RuntimeError as e:
         print(f"[ERROR] {e}")
-        return
+        return 1
 
     title, _, commit_body = message.strip().partition("\n\n")
     title = truncate(title, COMMIT_TITLE_MAX_LENGTH)
@@ -213,13 +217,14 @@ def run_commit(safe_mode: bool, model: str, temperature: float, max_tokens: int)
     print("--- Commit Message ---")
     print(final_message)
     print("----------------------")
+    return 0
 
 
-def run_pr(safe_mode: bool, model: str, temperature: float, max_tokens: int) -> None: # pr 초안을 제미나이를 이용해 뽑아오자
+def run_pr(safe_mode: bool, model: str, temperature: float, max_tokens: int) -> int: # pr 초안을 제미나이를 이용해 뽑아오자
     status = get_git_status()
     if not status.strip():
         print("[INFO] 변경 사항이 없습니다. PR을 생성하지 않고 종료합니다.")
-        return
+        return 0
 
     diff = get_git_diff()
     branch = get_current_branch()
@@ -232,7 +237,7 @@ def run_pr(safe_mode: bool, model: str, temperature: float, max_tokens: int) -> 
     if not api_key:
         print("[ERROR] AI_API_KEY 환경변수가 설정되지 않았습니다.")
         print('## 예) export AI_API_KEY="YOUR_KEY"')
-        return
+        return 1
 
     print(f"[INFO] 현재 브랜치: {branch}")
     user_prompt = f"[브랜치] {branch}\n\n[git status]\n{status}\n[git diff]\n{diff}"
@@ -246,7 +251,7 @@ def run_pr(safe_mode: bool, model: str, temperature: float, max_tokens: int) -> 
         )
     except RuntimeError as e:
         print(f"[ERROR] {e}")
-        return
+        return 1
 
     title, _, pr_body = response.strip().partition("\n\n")
     title = truncate(title, PR_TITLE_MAX_LENGTH)
@@ -259,6 +264,7 @@ def run_pr(safe_mode: bool, model: str, temperature: float, max_tokens: int) -> 
     print()
     print("--- PR Body ---")
     print(pr_body)
+    return 0
 
 
 def main() -> None:
@@ -275,9 +281,9 @@ def main() -> None:
     args = parser.parse_args() # 실제 인자 파싱
 
     if args.command == "commit": # 들어온 인자가 커밋이면
-        run_commit(args.safe_mode, args.model, args.temperature, args.max_tokens) # 커밋 함수 실행
+        sys.exit(run_commit(args.safe_mode, args.model, args.temperature, args.max_tokens)) # 커밋 함수 실행
     elif args.command == "pr": # 들어온 인자가 피알이면
-        run_pr(args.safe_mode, args.model, args.temperature, args.max_tokens) # 피알 함수 실행
+        sys.exit(run_pr(args.safe_mode, args.model, args.temperature, args.max_tokens)) # 피알 함수 실행
 
 
 if __name__ == "__main__":
