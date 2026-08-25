@@ -11,6 +11,10 @@ COMMIT_TITLE_MAX_LENGTH = 72
 PR_TITLE_MAX_LENGTH = 80
 PR_SECTIONS = ["## Why", "## What", "## How to Test"]
 
+DEFAULT_MODEL = "gemini-3.1-flash-lite"
+DEFAULT_TEMPERATURE = 0.3
+DEFAULT_MAX_TOKENS = 1024
+
 SENSITIVE_PATTERNS = [
     (re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"), "[EMAIL]"),
     (re.compile(r"(?i)(api[_-]?key|secret|token|password)(\s*[:=]\s*)[\"']?[A-Za-z0-9_\-]{16,}[\"']?"), r"\1\2[MASKED]"),
@@ -90,9 +94,9 @@ def get_current_branch() -> str: # 현재 활성화 된 브랜치 정보를 가�
 def call_gemini( # 제미나이 공통 요청 엔트리 함수
     prompt: str, # 제미나이한테 쏠 프롬프트
     api_key: str, # 제미나이 api 키
-    model: str = "gemini-3.1-flash-lite", # 모델명
-    temperature: float = 0.3, # 답변의 창의성 (0~2 사이; 2로 갈수록 더 창의적임)
-    max_tokens: int = 1024, # 최대 답변 길이 (넘으면 내용이 끊김)
+    model: str = DEFAULT_MODEL, # 모델명
+    temperature: float = DEFAULT_TEMPERATURE, # 답변의 창의성 (0~2 사이; 2로 갈수록 더 창의적임)
+    max_tokens: int = DEFAULT_MAX_TOKENS, # 최대 답변 길이 (넘으면 내용이 끊김)
     system_instruction: str | None = None, # 시스템 프롬프트 (공통 프롬프트)
 ) -> str:
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
@@ -164,7 +168,7 @@ def mask_sensitive(text: str) -> str: # SENSITIVE_PATTERNS에 저장된 패턴�
     return text
 
 
-def run_commit(safe_mode: bool) -> None: # 관련 데이터를 받아와서 커밋 메시지를 생성해주는 함수
+def run_commit(safe_mode: bool, model: str, temperature: float, max_tokens: int) -> None: # 관련 데이터를 받아와서 커밋 메시지를 생성해주는 함수
     status = get_git_status()
     if not status.strip():
         print("[INFO] 변경 사항이 없습니다. 커밋 메시지를 생성하지 않고 종료합니다.")
@@ -189,9 +193,13 @@ def run_commit(safe_mode: bool) -> None: # 관련 데이터를 받아와서 커�
 
     user_prompt = f"[git status]\n{status}\n[git diff]\n{diff}" # 수정/추가/삭제된 현황과 수정된 세부 내역으로 유저 프롬프트를 생성함
 
-    print("[INFO] AI API 요청 중...")
+    print(f"[INFO] AI API 요청 중... (model={model}, temperature={temperature}, max_tokens={max_tokens})")
     try:
-        message = call_gemini(user_prompt, api_key, system_instruction=COMMIT_SYSTEM_PROMPT)
+        message = call_gemini(
+            user_prompt, api_key,
+            model=model, temperature=temperature, max_tokens=max_tokens,
+            system_instruction=COMMIT_SYSTEM_PROMPT,
+        )
     except RuntimeError as e:
         print(f"[ERROR] {e}")
         return
@@ -207,7 +215,7 @@ def run_commit(safe_mode: bool) -> None: # 관련 데이터를 받아와서 커�
     print("----------------------")
 
 
-def run_pr(safe_mode: bool) -> None: # pr 초안을 제미나이를 이용해 뽑아오자
+def run_pr(safe_mode: bool, model: str, temperature: float, max_tokens: int) -> None: # pr 초안을 제미나이를 이용해 뽑아오자
     status = get_git_status()
     if not status.strip():
         print("[INFO] 변경 사항이 없습니다. PR을 생성하지 않고 종료합니다.")
@@ -229,9 +237,13 @@ def run_pr(safe_mode: bool) -> None: # pr 초안을 제미나이를 이용해 �
     print(f"[INFO] 현재 브랜치: {branch}")
     user_prompt = f"[브랜치] {branch}\n\n[git status]\n{status}\n[git diff]\n{diff}"
 
-    print("[INFO] AI API 요청 중...")
+    print(f"[INFO] AI API 요청 중... (model={model}, temperature={temperature}, max_tokens={max_tokens})")
     try:
-        response = call_gemini(user_prompt, api_key, system_instruction=PR_SYSTEM_PROMPT)
+        response = call_gemini(
+            user_prompt, api_key,
+            model=model, temperature=temperature, max_tokens=max_tokens,
+            system_instruction=PR_SYSTEM_PROMPT,
+        )
     except RuntimeError as e:
         print(f"[ERROR] {e}")
         return
@@ -250,18 +262,22 @@ def run_pr(safe_mode: bool) -> None: # pr 초안을 제미나이를 이용해 �
 
 
 def main() -> None:
+    common_parser = argparse.ArgumentParser(add_help=False) # commit/pr이 공통으로 쓸 옵션을 모아두는 파서. -h 중복 등록 충돌을 막기 위해 add_help=False
+    common_parser.add_argument("-safe-mode", action="store_true") # store_true: safe-mode값이 있으면 True, 없으면 False
+    common_parser.add_argument("-model", default=DEFAULT_MODEL) # 모델을 받고, 옵션이 없으면 기본값 사용
+    common_parser.add_argument("-temperature", type=float, default=DEFAULT_TEMPERATURE) # 모델이랑 비슷
+    common_parser.add_argument("-max-tokens", type=int, default=DEFAULT_MAX_TOKENS) # 모델이랑 비슷
+
     parser = argparse.ArgumentParser() # 인자를 받을 수 있게 관련 기능 활성화
     subparsers = parser.add_subparsers(dest="command", required=True) # 인자를 받을 수 있게 준비 (required가 True이므로 항상 필요로 함)
-    commit_parser = subparsers.add_parser("commit") # commit 인자 받을 수 있게 허용
-    commit_parser.add_argument("-safe-mode", action="store_true")
-    pr_parser = subparsers.add_parser("pr") # pr 인자 받을 수 있게 허용
-    pr_parser.add_argument("-safe-mode", action="store_true") # safe-mode 인자 받을 수 있게 허용
+    subparsers.add_parser("commit", parents=[common_parser]) # commit 인자 받을 수 있게 허용
+    subparsers.add_parser("pr", parents=[common_parser]) # pr 인자 받을 수 있게 허용
     args = parser.parse_args() # 실제 인자 파싱
 
     if args.command == "commit": # 들어온 인자가 커밋이면
-        run_commit(args.safe_mode) # 커밋 함수 실행
+        run_commit(args.safe_mode, args.model, args.temperature, args.max_tokens) # 커밋 함수 실행
     elif args.command == "pr": # 들어온 인자가 피알이면
-        run_pr(args.safe_mode) # 피알 함수 실행
+        run_pr(args.safe_mode, args.model, args.temperature, args.max_tokens) # 피알 함수 실행
 
 
 if __name__ == "__main__":
